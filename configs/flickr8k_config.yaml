@@ -1,0 +1,194 @@
+# =============================================================================
+# NCKH Image Captioning - Flickr8k Fast Training Configuration
+# =============================================================================
+# Optimized for quick training and SGG extraction on Colab / Kaggle.
+# Dataset: Flickr8k (Karpathy split)
+# =============================================================================
+
+# --- Data Configuration ---
+data:
+  dataset_name: "flickr8k"
+  images_dir: "data/flickr8k/images"                      # Flickr8k images only
+  captions_file: "data/flickr8k/annotations/dataset_flickr8k.json"
+  scene_graphs_dir: "data/flickr8k/scene_graphs"
+  vocab_dir: "data/flickr8k/vocab"
+  vocab_file: "data/flickr8k/vocab/vocab.json"
+  glove_file: "data/vocab/glove.6B.300d.txt"             # GloVe embeddings
+
+  # Split configuration
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+
+  # Caption parameters
+  max_caption_len: 20          # Maximum caption length (reduced for speed)
+  min_word_freq: 3             # Lower frequency limit for smaller dataset
+
+  # Scene graph parameters
+  max_triples: 15              # Reduced for speed
+
+  # DataLoader parameters
+  batch_size: 64
+  num_workers: 2               # Recommended for Colab to avoid CPU bottleneck
+  pin_memory: true
+  shuffle_train: true
+
+  # Special token IDs
+  pad_token_id: 0              # <pad>
+  start_token_id: 1            # <start>
+  end_token_id: 2              # <end>
+  unk_token_id: 3              # <unk>
+
+# --- Model Configuration ---
+model:
+  # Transformer dimensions (slightly smaller for faster convergence)
+  d_model: 256                 # 256 for Flickr8k to prevent overfitting
+  n_heads: 8
+  n_encoder_layers: 2          # 2 layers instead of 3
+  n_decoder_layers: 2          # 2 layers instead of 3
+  d_ff: 1024
+  dropout: 0.2                 # Higher dropout to avoid overfitting
+
+  # Visual feature extractor
+  visual_backbone: "resnet50"  # ResNet-50 is faster to run than ResNet-101
+  visual_feat_dim: 2048
+  grid_size: 7                 # Spatial grid size (7x7 → N_v = 49)
+  freeze_backbone: true
+
+  # Semantic feature extractor
+  glove_dim: 300
+  max_triples: 15
+  triple_encoder_layers: 2
+
+  # Decoder
+  max_decode_len: 20
+
+  # Confidence-aware Scene Graph
+  use_confidence: false        # Set true to filter noisy scene graph triples
+
+  # Residual Multi-scale Fusion
+  multi_scale_fusion: false    # Set true for multi-layer residual fusion
+
+# --- Fusion Configuration ---
+fusion:
+  # Fusion strategy: concat | cross_attention | gated | co_attention | gated_co_attention | adaptive
+  type: "gated_co_attention"
+
+  # Concatenation-specific
+  concat:
+    project_dim: 256
+
+  # Cross-Attention-specific
+  cross_attention:
+    n_heads: 8
+    n_layers: 1
+
+  # Gated Fusion-specific
+  gated:
+    gate_activation: "sigmoid"
+
+  # Co-Attention-specific
+  co_attention:
+    n_heads: 8
+    n_layers: 1
+    hidden_dim: 256
+
+  # Gated Co-Attention-specific (Improvement 1)
+  gated_co_attention:
+    n_heads: 8
+    linear_attention: true     # Use low-rank projection (Improvement 4)
+    proj_len: 8                # Smaller proj_len for Flickr8k (smaller model)
+
+  # Adaptive Mixture-of-Fusion (Improvement 2)
+  adaptive:
+    types:
+      - "concat"
+      - "cross_attn"
+      - "gated"
+      - "gated_co_attn"
+
+# --- Training Configuration ---
+training:
+  seed: 42
+  device: "auto"
+  mixed_precision: true
+  gradient_accumulation_steps: 1
+
+  # Stage 1: Cross-Entropy Training
+  stage1:
+    epochs: 15                 # Quick convergence on Flickr8k
+    lr: 2.0e-4                 # Slightly higher learning rate for smaller model
+    warmup_epochs: 3
+    label_smoothing: 0.1
+    grad_clip: 1.0
+    optimizer: "adamw"
+    weight_decay: 0.05
+    scheduler: "cosine"
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+    # Early stopping
+    early_stopping:
+      enabled: true
+      patience: 3
+      metric: "cider"
+      mode: "max"
+
+  # Stage 2: SCST (Self-Critical Sequence Training)
+  stage2:
+    enabled: true
+    epochs: 10
+    lr: 2.0e-5
+    warmup_epochs: 1
+    grad_clip: 1.0
+    optimizer: "adam"
+    weight_decay: 0.0
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+    # SCST-specific
+    scst:
+      reward_metric: "cider"
+      baseline: "greedy"
+      sample_n: 5
+
+    # Early stopping
+    early_stopping:
+      enabled: true
+      patience: 2
+      metric: "cider"
+      mode: "max"
+
+# --- Inference Configuration ---
+inference:
+  beam_size: 3                 # Faster beam search
+  max_len: 20
+  length_penalty: 1.0
+  temperature: 1.0
+  top_k: 0
+  top_p: 0.0
+  repetition_penalty: 1.0
+
+# --- Evaluation Configuration ---
+evaluation:
+  metrics:
+    - "bleu"
+    - "meteor"
+    - "rouge_l"
+    - "cider"
+  eval_during_training: true
+  eval_frequency: 1
+
+# --- Logging Configuration ---
+logging:
+  log_dir: "outputs/flickr8k/logs"
+  checkpoint_dir: "outputs/flickr8k/checkpoints"
+  results_dir: "outputs/flickr8k/results"
+  tensorboard: true
+  tensorboard_dir: "outputs/flickr8k/tensorboard"
+  wandb:
+    enabled: false
+  log_frequency: 50
+  save_frequency: 1
+  keep_best_n: 1
+  verbose: true
